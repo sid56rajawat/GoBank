@@ -6,9 +6,74 @@ import (
 	"net/http"
 )
 
+type APIServer struct {
+	listenAddress string
+	store         Storage
+}
+
+func NewAPIServer(listenAddress string, store Storage) *APIServer {
+	return &APIServer{
+		listenAddress: listenAddress,
+		store:         store,
+	}
+}
+
+func (s *APIServer) Run() {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /account/{id}", makeHTTPHandleFunc(s.handleGetAccountByID))
+	mux.HandleFunc("GET /account/", makeHTTPHandleFunc(s.handleGetAccount))
+	mux.HandleFunc("POST /account", makeHTTPHandleFunc(s.handleCreateAccount))
+	mux.HandleFunc("DELETE /account", makeHTTPHandleFunc(s.handleDeleteAccount))
+
+	log.Println("JSON API server running on: ", s.listenAddress)
+
+	http.ListenAndServe(s.listenAddress, mux)
+}
+
+func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request) error {
+	id := r.PathValue("id")
+	account := NewAccount("Sid", "Rajawat")
+	log.Println("Fetching Details of Account No:", id)
+
+	return WriteJSON(w, http.StatusOK, account)
+}
+
+func (s *APIServer) handleGetAccount(w http.ResponseWriter, r *http.Request) error {
+	accounts, err := s.store.GetAccounts()
+
+	if err != nil {
+		return err
+	}
+
+	return WriteJSON(w, http.StatusOK, accounts)
+}
+
+func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
+	createAccountReq := CreateAccountRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&createAccountReq); err != nil {
+		return err
+	}
+
+	account := NewAccount(createAccountReq.FistName, createAccountReq.LastName)
+	if err := s.store.CreateAccount(account); err != nil {
+		return err
+	}
+
+	return WriteJSON(w, http.StatusOK, account)
+}
+
+func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
+	return nil
+}
+
+func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
+	return nil
+}
+
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
+	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(v)
 }
 
@@ -24,47 +89,4 @@ func makeHTTPHandleFunc(f apiFunc) http.HandlerFunc {
 			WriteJSON(w, http.StatusBadRequest, ApiError{Error: err.Error()})
 		}
 	}
-}
-
-type APIServer struct {
-	listenAddress string
-}
-
-func NewAPIServer(listenAddress string) *APIServer {
-	return &APIServer{
-		listenAddress: listenAddress,
-	}
-}
-
-func (s *APIServer) Run() {
-	mux := http.NewServeMux()
-
-	// mux.HandleFunc("GET /account", makeHTTPHandleFunc(s.handleGetAccount))
-	mux.HandleFunc("GET /account/{id}", makeHTTPHandleFunc(s.handleGetAccount))
-	mux.HandleFunc("POST /account", makeHTTPHandleFunc(s.handleCreateAccount))
-	mux.HandleFunc("DELETE /account", makeHTTPHandleFunc(s.handleDeleteAccount))
-
-	log.Println("JSON API server running on: ", s.listenAddress)
-
-	http.ListenAndServe(s.listenAddress, mux)
-}
-
-func (s *APIServer) handleGetAccount(w http.ResponseWriter, r *http.Request) error {
-	id := r.PathValue("id")
-	account := NewAccount("Sid", "Rajawat")
-	log.Println("Fetching Details of Account No:", id)
-
-	return WriteJSON(w, http.StatusOK, account)
-}
-
-func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
-	return nil
-}
-
-func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
-	return nil
-}
-
-func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-	return nil
 }
