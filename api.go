@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"time"
+
+	jwt "github.com/golang-jwt/jwt/v5"
 )
 
 type APIServer struct {
@@ -23,7 +27,7 @@ func NewAPIServer(listenAddress string, store Storage) *APIServer {
 func (s *APIServer) Run() {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /account/{id}", makeHTTPHandleFunc(s.handleGetAccountByID))
+	mux.HandleFunc("GET /account/{id}", withJWTAuth(makeHTTPHandleFunc(s.handleGetAccountByID), s.store))
 	mux.HandleFunc("GET /account/", makeHTTPHandleFunc(s.handleGetAccount))
 	mux.HandleFunc("POST /account", makeHTTPHandleFunc(s.handleCreateAccount))
 	mux.HandleFunc("POST /deposit", makeHTTPHandleFunc(s.handleDeposit))
@@ -71,6 +75,13 @@ func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
+
+	tokenString, err := createJWT(account)
+
+	if err != nil {
+		return err
+	}
+	fmt.Println("JWT token:", tokenString)
 
 	return WriteJSON(w, http.StatusOK, account)
 }
@@ -125,6 +136,65 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+func createJWT(account *Account) (string, error) {
+	claims := &jwt.MapClaims{
+		"expiresAt":     jwt.NewNumericDate(time.Unix(1516239022, 0)),
+		"accountNumber": account.Number,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	secret := os.Getenv("JWT_SECRET")
+	return token.SignedString([]byte(secret))
+}
+
+func withJWTAuth(handlerFunc http.HandlerFunc, store Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tokenString := r.Header.Get("x-jwt-token")
+
+		token, err := validateJWT(tokenString)
+		if err != nil || !token.Valid {
+			log.Println("JWT token invalid")
+			accessDenied(w)
+			return
+		}
+
+		id, err := getID(r)
+		if err != nil {
+			log.Println("Error:", err.Error())
+			accessDenied(w)
+			return
+		}
+
+		account, err := store.GetAccountByID(id)
+		if err != nil {
+			log.Println("Error:", err.Error())
+			accessDenied(w)
+			return
+		}
+
+		claims := token.Claims.(jwt.MapClaims)
+
+		if claims["accountNumber"] != float64(account.Number) {
+			log.Println("account number in jwt doesn't match the account being accessed")
+			accessDenied(w)
+			return
+		}
+		handlerFunc(w, r)
+	}
+}
+
+func validateJWT(tokenString string) (*jwt.Token, error) {
+	secret := os.Getenv("JWT_SECRET")
+
+	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		return []byte(secret), nil
+	})
+}
+
 type apiFunc func(http.ResponseWriter, *http.Request) error
 
 type ApiError struct {
@@ -146,4 +216,8 @@ func getID(r *http.Request) (int, error) {
 		return 0, fmt.Errorf("invalid id given %s", idStr)
 	}
 	return id, nil
+}
+
+func accessDenied(w http.ResponseWriter) {
+	WriteJSON(w, http.StatusForbidden, ApiError{Error: "access denied"})
 }
